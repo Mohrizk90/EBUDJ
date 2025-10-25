@@ -22,7 +22,7 @@ const Layout = ({ children }) => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex">
+    <div className="min-h-screen bg-gray-50 flex safe-area-top">
       {/* Mobile sidebar overlay */}
       {sidebarOpen && (
         <div 
@@ -31,10 +31,11 @@ const Layout = ({ children }) => {
         />
       )}
 
-      {/* Enhanced Sidebar */}
+      {/* Enhanced Sidebar - Mobile Optimized */}
       <div className={`
-        fixed inset-y-0 left-0 z-50 w-72 border-r border-gray-200 bg-white/95 backdrop-blur-md transition-transform duration-300 ease-in-out lg:translate-x-0 lg:static lg:inset-0 shadow-lg lg:shadow-none
+        fixed inset-y-0 left-0 z-50 w-80 sm:w-72 border-r border-gray-200 bg-white/95 backdrop-blur-md transition-transform duration-300 ease-in-out lg:translate-x-0 lg:static lg:inset-0 shadow-lg lg:shadow-none
         ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
+        safe-area-left
       `}>
         <div className="flex flex-col h-full">
           {/* Enhanced Header */}
@@ -100,25 +101,25 @@ const Layout = ({ children }) => {
         </div>
       </div>
 
-      {/* Main content */}
-      <div className="flex-1 flex flex-col lg:ml-0">
-        {/* Enhanced Top bar */}
-        <header className="top-bar flex h-16 items-center px-6">
+      {/* Main content - Mobile Optimized */}
+      <div className="flex-1 flex flex-col lg:ml-0 safe-area-right">
+        {/* Enhanced Top bar - Mobile Responsive */}
+        <header className="top-bar flex h-16 items-center px-4 sm:px-6 pwa-header">
           <div className="flex items-center justify-between w-full">
-            <div className="flex items-center space-x-4">
+            <div className="flex items-center space-x-2 sm:space-x-4">
               <button
                 onClick={() => setSidebarOpen(true)}
-                className="lg:hidden p-2 rounded-lg text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-all duration-200 hover:scale-110"
+                className="lg:hidden p-2 rounded-lg text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-all duration-200 hover:scale-110 touch-target"
               >
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
                 </svg>
               </button>
-              <div>
-                <h2 className="text-2xl font-bold text-gray-900 dark:text-white">
+              <div className="min-w-0 flex-1">
+                <h2 className="text-lg sm:text-2xl font-bold text-gray-900 dark:text-white truncate">
                   {currentContext ? currentContext.name : 'Finance Tracker'}
                 </h2>
-                <p className="text-sm text-gray-600 dark:text-gray-400">
+                <p className="text-xs sm:text-sm text-gray-600 dark:text-gray-400 truncate">
                   {currentContext ? `${currentContext.type} Dashboard` : 'Welcome to Your Finance Hub'}
                 </p>
               </div>
@@ -146,9 +147,9 @@ const Layout = ({ children }) => {
           </div>
         </header>
 
-               {/* Enhanced Page content */}
-               <main className="main-content">
-                 <div className="max-w-7xl mx-auto">
+               {/* Enhanced Page content - Mobile Optimized */}
+               <main className="main-content flex-1 overflow-y-auto">
+                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6">
                    {children}
                  </div>
                </main>
