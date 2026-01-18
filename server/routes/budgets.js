@@ -3,7 +3,7 @@ const router = express.Router();
 const db = require('../config/database');
 
 // GET /api/budgets?context_id=:id&month=:month - Get budgets for context and month
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
     const { context_id, month } = req.query;
     
@@ -11,14 +11,17 @@ router.get('/', (req, res) => {
       return res.status(400).json({ error: 'context_id and month are required' });
     }
 
-    const budgets = db.getDb().prepare(`
-      SELECT * FROM budgets 
-      WHERE context_id = ? AND month = ?
-      ORDER BY category ASC
-    `).all(context_id, month);
+    const { data: budgets, error } = await db.getSupabase()
+      .from('budgets')
+      .select('*')
+      .eq('context_id', context_id)
+      .eq('month', month)
+      .order('category', { ascending: true });
+    
+    if (error) throw error;
     
     console.log('Fetched budgets:', budgets);
-    res.json(budgets);
+    res.json(budgets || []);
   } catch (error) {
     console.error('Error fetching budgets:', error);
     res.status(500).json({ error: 'Failed to fetch budgets' });
@@ -26,7 +29,7 @@ router.get('/', (req, res) => {
 });
 
 // POST /api/budgets - Create new budget
-router.post('/', (req, res) => {
+router.post('/', async (req, res) => {
   try {
     const { context_id, category, monthly_limit, month } = req.body;
     
@@ -39,24 +42,33 @@ router.post('/', (req, res) => {
     }
 
     // Check if budget already exists for this category and month
-    const existingBudget = db.getDb().prepare(`
-      SELECT * FROM budgets 
-      WHERE context_id = ? AND category = ? AND month = ?
-    `).get(context_id, category, month);
+    const { data: existingBudget } = await db.getSupabase()
+      .from('budgets')
+      .select('*')
+      .eq('context_id', context_id)
+      .eq('category', category)
+      .eq('month', month)
+      .single();
 
     if (existingBudget) {
       return res.status(400).json({ error: 'Budget already exists for this category and month' });
     }
 
-    const stmt = db.getDb().prepare(`
-      INSERT INTO budgets (context_id, category, monthly_limit, month, spent)
-      VALUES (?, ?, ?, ?, 0)
-    `);
+    const { data: newBudget, error } = await db.getSupabase()
+      .from('budgets')
+      .insert([{
+        context_id,
+        category,
+        monthly_limit,
+        month,
+        spent: 0
+      }])
+      .select()
+      .single();
     
-    const result = stmt.run(context_id, category, monthly_limit, month);
-    console.log('Created budget with ID:', result.lastInsertRowid);
+    if (error) throw error;
     
-    const newBudget = db.getDb().prepare('SELECT * FROM budgets WHERE id = ?').get(result.lastInsertRowid);
+    console.log('Created budget with ID:', newBudget?.id);
     console.log('New budget data:', newBudget);
     res.status(201).json(newBudget);
   } catch (error) {
@@ -66,7 +78,7 @@ router.post('/', (req, res) => {
 });
 
 // PUT /api/budgets/:id - Update budget
-router.put('/:id', (req, res) => {
+router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { category, monthly_limit, month } = req.body;
@@ -79,19 +91,23 @@ router.put('/:id', (req, res) => {
       return res.status(400).json({ error: 'Monthly limit must be greater than 0' });
     }
 
-    const stmt = db.getDb().prepare(`
-      UPDATE budgets 
-      SET category = ?, monthly_limit = ?, month = ?
-      WHERE id = ?
-    `);
+    const { data: updatedBudget, error } = await db.getSupabase()
+      .from('budgets')
+      .update({
+        category,
+        monthly_limit,
+        month
+      })
+      .eq('id', id)
+      .select()
+      .single();
     
-    const result = stmt.run(category, monthly_limit, month, id);
+    if (error) throw error;
     
-    if (result.changes === 0) {
+    if (!updatedBudget) {
       return res.status(404).json({ error: 'Budget not found' });
     }
     
-    const updatedBudget = db.getDb().prepare('SELECT * FROM budgets WHERE id = ?').get(id);
     res.json(updatedBudget);
   } catch (error) {
     console.error('Error updating budget:', error);
@@ -100,16 +116,16 @@ router.put('/:id', (req, res) => {
 });
 
 // DELETE /api/budgets/:id - Delete budget
-router.delete('/:id', (req, res) => {
+router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
-    const stmt = db.getDb().prepare('DELETE FROM budgets WHERE id = ?');
-    const result = stmt.run(id);
+    const { error } = await db.getSupabase()
+      .from('budgets')
+      .delete()
+      .eq('id', id);
     
-    if (result.changes === 0) {
-      return res.status(404).json({ error: 'Budget not found' });
-    }
+    if (error) throw error;
     
     res.json({ message: 'Budget deleted successfully' });
   } catch (error) {

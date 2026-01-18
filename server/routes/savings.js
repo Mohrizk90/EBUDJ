@@ -3,7 +3,7 @@ const router = express.Router();
 const db = require('../config/database');
 
 // GET /api/savings?context_id=:id - Get savings for context
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
     const { context_id } = req.query;
     
@@ -11,13 +11,16 @@ router.get('/', (req, res) => {
       return res.status(400).json({ error: 'context_id is required' });
     }
 
-    const savings = db.getDb().prepare(`
-      SELECT * FROM savings 
-      WHERE context_id = ? 
-      ORDER BY date DESC, created_at DESC
-    `).all(context_id);
+    const { data: savings, error } = await db.getSupabase()
+      .from('savings')
+      .select('*')
+      .eq('context_id', context_id)
+      .order('date', { ascending: false })
+      .order('created_at', { ascending: false });
     
-    res.json(savings);
+    if (error) throw error;
+    
+    res.json(savings || []);
   } catch (error) {
     console.error('Error fetching savings:', error);
     res.status(500).json({ error: 'Failed to fetch savings' });
@@ -25,7 +28,7 @@ router.get('/', (req, res) => {
 });
 
 // POST /api/savings - Create new savings record
-router.post('/', (req, res) => {
+router.post('/', async (req, res) => {
   try {
     const { context_id, account, date, amount, goal, description } = req.body;
     
@@ -43,14 +46,21 @@ router.post('/', (req, res) => {
       return res.status(400).json({ error: 'Goal must be greater than 0' });
     }
 
-    const stmt = db.getDb().prepare(`
-      INSERT INTO savings (context_id, account, date, amount, goal, description)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `);
+    const { data: newSaving, error } = await db.getSupabase()
+      .from('savings')
+      .insert([{
+        context_id,
+        account,
+        date: date || null,
+        amount,
+        goal,
+        description: description || null
+      }])
+      .select()
+      .single();
     
-    const result = stmt.run(context_id, account, date || null, amount, goal, description || null);
+    if (error) throw error;
     
-    const newSaving = db.getDb().prepare('SELECT * FROM savings WHERE id = ?').get(result.lastInsertRowid);
     res.status(201).json(newSaving);
   } catch (error) {
     console.error('Error creating savings record:', error);
@@ -59,7 +69,7 @@ router.post('/', (req, res) => {
 });
 
 // PUT /api/savings/:id - Update savings record
-router.put('/:id', (req, res) => {
+router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { account, date, amount, goal, description } = req.body;
@@ -85,19 +95,25 @@ router.put('/:id', (req, res) => {
       return res.status(400).json({ error: 'Goal must be greater than 0' });
     }
 
-    const stmt = db.getDb().prepare(`
-      UPDATE savings 
-      SET account = ?, date = ?, amount = ?, goal = ?, description = ?
-      WHERE id = ?
-    `);
+    const { data: updatedSaving, error } = await db.getSupabase()
+      .from('savings')
+      .update({
+        account,
+        date: date || null,
+        amount,
+        goal,
+        description: description || null
+      })
+      .eq('id', id)
+      .select()
+      .single();
     
-    const result = stmt.run(account, date || null, amount, goal, description || null, id);
+    if (error) throw error;
     
-    if (result.changes === 0) {
+    if (!updatedSaving) {
       return res.status(404).json({ error: 'Savings record not found' });
     }
     
-    const updatedSaving = db.getDb().prepare('SELECT * FROM savings WHERE id = ?').get(id);
     res.json(updatedSaving);
   } catch (error) {
     console.error('Error updating savings record:', error);
@@ -106,16 +122,16 @@ router.put('/:id', (req, res) => {
 });
 
 // DELETE /api/savings/:id - Delete savings record
-router.delete('/:id', (req, res) => {
+router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
-    const stmt = db.getDb().prepare('DELETE FROM savings WHERE id = ?');
-    const result = stmt.run(id);
+    const { error } = await db.getSupabase()
+      .from('savings')
+      .delete()
+      .eq('id', id);
     
-    if (result.changes === 0) {
-      return res.status(404).json({ error: 'Savings record not found' });
-    }
+    if (error) throw error;
     
     res.json({ message: 'Savings record deleted successfully' });
   } catch (error) {

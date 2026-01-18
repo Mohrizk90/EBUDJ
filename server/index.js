@@ -41,6 +41,45 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // Serve static files from the React app build directory
 app.use(express.static(path.join(__dirname, '../client/build')));
 
+// Health check endpoint
+app.get('/api/health', async (req, res) => {
+  try {
+    const db = require('./config/database');
+    const supabase = db.getSupabase();
+    
+    // Check Supabase connection
+    const { data, error } = await supabase
+      .from('contexts')
+      .select('id')
+      .limit(1);
+    
+    const health = {
+      status: 'ok',
+      database: {
+        connected: !error,
+        error: error ? {
+          code: error.code,
+          message: error.message,
+          hint: error.code === 'PGRST116' ? 'Tables not created. Run supabase-migration.sql in Supabase SQL Editor.' : null
+        } : null
+      },
+      environment: {
+        nodeEnv: process.env.NODE_ENV,
+        hasSupabaseUrl: !!process.env.SUPABASE_URL,
+        hasSupabaseKey: !!(process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY)
+      }
+    };
+    
+    res.json(health);
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      message: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+});
+
 // API Routes
 app.use('/api/contexts', require('./routes/contexts'));
 app.use('/api/transactions', require('./routes/transactions'));
@@ -58,8 +97,17 @@ app.get('*', (req, res) => {
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ error: 'Something went wrong!' });
+  console.error('❌ Server Error:', err.message);
+  console.error('Stack:', err.stack);
+  
+  // Provide more detailed error information in development
+  const errorResponse = {
+    error: 'Something went wrong!',
+    message: process.env.NODE_ENV === 'development' ? err.message : undefined,
+    stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+  };
+  
+  res.status(500).json(errorResponse);
 });
 
 app.listen(PORT, () => {

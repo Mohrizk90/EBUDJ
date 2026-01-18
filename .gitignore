@@ -1,1 +1,27 @@
 node_modules
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# SQLite database files (migrated to Supabase)
+*.db
+*.db-shm
+*.db-wal
+
+# Build outputs
+client/build
+dist
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~

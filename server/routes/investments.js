@@ -3,7 +3,7 @@ const router = express.Router();
 const db = require('../config/database');
 
 // GET /api/investments?context_id=:id - Get investments for context
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
     const { context_id } = req.query;
     
@@ -11,13 +11,16 @@ router.get('/', (req, res) => {
       return res.status(400).json({ error: 'context_id is required' });
     }
 
-    const investments = db.getDb().prepare(`
-      SELECT * FROM investments 
-      WHERE context_id = ? 
-      ORDER BY date_invested DESC, created_at DESC
-    `).all(context_id);
+    const { data: investments, error } = await db.getSupabase()
+      .from('investments')
+      .select('*')
+      .eq('context_id', context_id)
+      .order('date_invested', { ascending: false })
+      .order('created_at', { ascending: false });
     
-    res.json(investments);
+    if (error) throw error;
+    
+    res.json(investments || []);
   } catch (error) {
     console.error('Error fetching investments:', error);
     res.status(500).json({ error: 'Failed to fetch investments' });
@@ -25,7 +28,7 @@ router.get('/', (req, res) => {
 });
 
 // POST /api/investments - Create new investment
-router.post('/', (req, res) => {
+router.post('/', async (req, res) => {
   try {
     const { context_id, asset_name, type, amount_invested, current_value, date_invested, notes } = req.body;
     
@@ -45,14 +48,22 @@ router.post('/', (req, res) => {
       return res.status(400).json({ error: 'Current value cannot be negative' });
     }
 
-    const stmt = db.getDb().prepare(`
-      INSERT INTO investments (context_id, asset_name, type, amount_invested, current_value, date_invested, notes)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `);
+    const { data: newInvestment, error } = await db.getSupabase()
+      .from('investments')
+      .insert([{
+        context_id,
+        asset_name,
+        type,
+        amount_invested,
+        current_value,
+        date_invested,
+        notes: notes || ''
+      }])
+      .select()
+      .single();
     
-    const result = stmt.run(context_id, asset_name, type, amount_invested, current_value, date_invested, notes || '');
+    if (error) throw error;
     
-    const newInvestment = db.getDb().prepare('SELECT * FROM investments WHERE id = ?').get(result.lastInsertRowid);
     res.status(201).json(newInvestment);
   } catch (error) {
     console.error('Error creating investment:', error);
@@ -61,7 +72,7 @@ router.post('/', (req, res) => {
 });
 
 // PUT /api/investments/:id - Update investment
-router.put('/:id', (req, res) => {
+router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { asset_name, type, amount_invested, current_value, date_invested, notes } = req.body;
@@ -82,19 +93,26 @@ router.put('/:id', (req, res) => {
       return res.status(400).json({ error: 'Current value cannot be negative' });
     }
 
-    const stmt = db.getDb().prepare(`
-      UPDATE investments 
-      SET asset_name = ?, type = ?, amount_invested = ?, current_value = ?, date_invested = ?, notes = ?
-      WHERE id = ?
-    `);
+    const { data: updatedInvestment, error } = await db.getSupabase()
+      .from('investments')
+      .update({
+        asset_name,
+        type,
+        amount_invested,
+        current_value,
+        date_invested,
+        notes: notes || ''
+      })
+      .eq('id', id)
+      .select()
+      .single();
     
-    const result = stmt.run(asset_name, type, amount_invested, current_value, date_invested, notes || '', id);
+    if (error) throw error;
     
-    if (result.changes === 0) {
+    if (!updatedInvestment) {
       return res.status(404).json({ error: 'Investment not found' });
     }
     
-    const updatedInvestment = db.getDb().prepare('SELECT * FROM investments WHERE id = ?').get(id);
     res.json(updatedInvestment);
   } catch (error) {
     console.error('Error updating investment:', error);
@@ -103,16 +121,16 @@ router.put('/:id', (req, res) => {
 });
 
 // DELETE /api/investments/:id - Delete investment
-router.delete('/:id', (req, res) => {
+router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
-    const stmt = db.getDb().prepare('DELETE FROM investments WHERE id = ?');
-    const result = stmt.run(id);
+    const { error } = await db.getSupabase()
+      .from('investments')
+      .delete()
+      .eq('id', id);
     
-    if (result.changes === 0) {
-      return res.status(404).json({ error: 'Investment not found' });
-    }
+    if (error) throw error;
     
     res.json({ message: 'Investment deleted successfully' });
   } catch (error) {

@@ -3,19 +3,39 @@ const router = express.Router();
 const db = require('../config/database');
 
 // GET /api/contexts - Get all contexts
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
-    const contexts = db.getDb().prepare('SELECT * FROM contexts ORDER BY created_at DESC').all();
+    const { data: contexts, error } = await db.getSupabase()
+      .from('contexts')
+      .select('*')
+      .order('created_at', { ascending: false });
+    
+    if (error) {
+      console.error('Supabase error:', error);
+      // Check for common errors
+      if (error.code === 'PGRST116' || error.message?.includes('relation') || error.message?.includes('does not exist')) {
+        return res.status(500).json({ 
+          error: 'Database tables not found',
+          message: 'Please run the SQL migration script (supabase-migration.sql) in your Supabase SQL Editor',
+          details: error.message
+        });
+      }
+      throw error;
+    }
+    
     console.log('Fetching contexts:', contexts);
-    res.json(contexts);
+    res.json(contexts || []);
   } catch (error) {
     console.error('Error fetching contexts:', error);
-    res.status(500).json({ error: 'Failed to fetch contexts' });
+    res.status(500).json({ 
+      error: 'Failed to fetch contexts',
+      message: error.message || 'Unknown error occurred'
+    });
   }
 });
 
 // POST /api/contexts - Create new context
-router.post('/', (req, res) => {
+router.post('/', async (req, res) => {
   try {
     const { name, type } = req.body;
     
@@ -27,10 +47,14 @@ router.post('/', (req, res) => {
       return res.status(400).json({ error: 'Type must be Home, Work, or Business' });
     }
 
-    const stmt = db.getDb().prepare('INSERT INTO contexts (name, type) VALUES (?, ?)');
-    const result = stmt.run(name, type);
+    const { data: newContext, error } = await db.getSupabase()
+      .from('contexts')
+      .insert([{ name, type }])
+      .select()
+      .single();
     
-    const newContext = db.getDb().prepare('SELECT * FROM contexts WHERE id = ?').get(result.lastInsertRowid);
+    if (error) throw error;
+    
     res.status(201).json(newContext);
   } catch (error) {
     console.error('Error creating context:', error);
@@ -39,7 +63,7 @@ router.post('/', (req, res) => {
 });
 
 // PUT /api/contexts/:id - Update context
-router.put('/:id', (req, res) => {
+router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { name, type } = req.body;
@@ -52,14 +76,19 @@ router.put('/:id', (req, res) => {
       return res.status(400).json({ error: 'Type must be Home, Work, or Business' });
     }
 
-    const stmt = db.getDb().prepare('UPDATE contexts SET name = ?, type = ? WHERE id = ?');
-    const result = stmt.run(name, type, id);
+    const { data: updatedContext, error } = await db.getSupabase()
+      .from('contexts')
+      .update({ name, type })
+      .eq('id', id)
+      .select()
+      .single();
     
-    if (result.changes === 0) {
+    if (error) throw error;
+    
+    if (!updatedContext) {
       return res.status(404).json({ error: 'Context not found' });
     }
     
-    const updatedContext = db.getDb().prepare('SELECT * FROM contexts WHERE id = ?').get(id);
     res.json(updatedContext);
   } catch (error) {
     console.error('Error updating context:', error);
@@ -68,16 +97,16 @@ router.put('/:id', (req, res) => {
 });
 
 // DELETE /api/contexts/:id - Delete context
-router.delete('/:id', (req, res) => {
+router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
-    const stmt = db.getDb().prepare('DELETE FROM contexts WHERE id = ?');
-    const result = stmt.run(id);
+    const { error } = await db.getSupabase()
+      .from('contexts')
+      .delete()
+      .eq('id', id);
     
-    if (result.changes === 0) {
-      return res.status(404).json({ error: 'Context not found' });
-    }
+    if (error) throw error;
     
     res.json({ message: 'Context deleted successfully' });
   } catch (error) {

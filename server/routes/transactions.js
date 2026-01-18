@@ -18,7 +18,7 @@ const validateRequest = (req, res, next) => {
 // GET /api/transactions?context_id=:id - Get transactions for context
 router.get('/', [
   query('context_id').isInt({ min: 1 }).withMessage('context_id must be a positive integer')
-], validateRequest, (req, res) => {
+], validateRequest, async (req, res) => {
   try {
     const { context_id } = req.query;
     
@@ -26,13 +26,16 @@ router.get('/', [
       return res.status(400).json({ error: 'context_id is required' });
     }
 
-    const transactions = db.getDb().prepare(`
-      SELECT * FROM transactions 
-      WHERE context_id = ? 
-      ORDER BY date DESC, created_at DESC
-    `).all(context_id);
+    const { data: transactions, error } = await db.getSupabase()
+      .from('transactions')
+      .select('*')
+      .eq('context_id', context_id)
+      .order('date', { ascending: false })
+      .order('created_at', { ascending: false });
     
-    res.json(transactions);
+    if (error) throw error;
+    
+    res.json(transactions || []);
   } catch (error) {
     console.error('Error fetching transactions:', error);
     res.status(500).json({ error: 'Failed to fetch transactions' });
@@ -49,7 +52,7 @@ router.post('/', [
   body('amount').isFloat({ min: 0.01 }).withMessage('amount must be a positive number'),
   body('account').trim().isLength({ min: 1, max: 100 }).withMessage('account must be between 1 and 100 characters'),
   body('notes').optional().trim().isLength({ max: 500 }).withMessage('notes must be less than 500 characters')
-], validateRequest, (req, res) => {
+], validateRequest, async (req, res) => {
   try {
     const { context_id, description, date, category, type, amount, account, notes } = req.body;
     
@@ -57,9 +60,16 @@ router.post('/', [
     console.log('Type received:', type, 'Type check:', typeof type);
     
     // Check if context exists
-    const contextExists = db.getDb().prepare('SELECT id FROM contexts WHERE id = ?').get(context_id);
+    const { data: contextExists } = await db.getSupabase()
+      .from('contexts')
+      .select('id')
+      .eq('id', context_id)
+      .single();
+    
     if (!contextExists) {
-      const availableContexts = db.getDb().prepare('SELECT * FROM contexts').all();
+      const { data: availableContexts } = await db.getSupabase()
+        .from('contexts')
+        .select('*');
       console.log('Available contexts:', availableContexts);
       return res.status(400).json({ 
         error: `Context with ID ${context_id} does not exist. Available contexts: ${JSON.stringify(availableContexts)}` 
@@ -67,7 +77,9 @@ router.post('/', [
     }
     
     // Always log available contexts for debugging
-    const availableContexts = db.getDb().prepare('SELECT * FROM contexts').all();
+    const { data: availableContexts } = await db.getSupabase()
+      .from('contexts')
+      .select('*');
     console.log('Available contexts in database:', availableContexts);
     
     if (!context_id || !description || !date || !category || !type || !amount || !account) {
@@ -91,10 +103,13 @@ router.post('/', [
       
       // Check if there's a budget for this category and month
       console.log('Looking for budget:', { context_id, category, currentMonth });
-      const budget = db.getDb().prepare(`
-        SELECT * FROM budgets 
-        WHERE context_id = ? AND category = ? AND month = ?
-      `).get(context_id, category, currentMonth);
+      const { data: budget } = await db.getSupabase()
+        .from('budgets')
+        .select('*')
+        .eq('context_id', context_id)
+        .eq('category', category)
+        .eq('month', currentMonth)
+        .single();
       
       console.log('Found budget:', budget);
       
@@ -105,11 +120,16 @@ router.post('/', [
         
         // Update the spent amount in the budget
         console.log('Updating budget:', { budgetId: budget.id, currentSpent, newSpent, amount });
-        const updateBudgetStmt = db.getDb().prepare(`
-          UPDATE budgets SET spent = ? WHERE id = ?
-        `);
-        const updateResult = updateBudgetStmt.run(newSpent, budget.id);
-        console.log('Budget update result:', updateResult);
+        const { error: updateError } = await db.getSupabase()
+          .from('budgets')
+          .update({ spent: newSpent })
+          .eq('id', budget.id);
+        
+        if (updateError) {
+          console.error('Budget update error:', updateError);
+        } else {
+          console.log('Budget updated successfully');
+        }
         
         // Check if over budget and create warning
         if (newSpent > budgetLimit) {
@@ -128,15 +148,23 @@ router.post('/', [
       }
     }
 
-    const stmt = db.getDb().prepare(`
-      INSERT INTO transactions (context_id, description, date, category, type, amount, account, notes)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
+    const { data: newTransaction, error } = await db.getSupabase()
+      .from('transactions')
+      .insert([{
+        context_id,
+        description,
+        date,
+        category,
+        type,
+        amount,
+        account,
+        notes: notes || ''
+      }])
+      .select()
+      .single();
     
-    console.log('Inserting transaction with values:', [context_id, description, date, category, type, amount, account, notes || '']);
-    const result = stmt.run(context_id, description, date, category, type, amount, account, notes || '');
+    if (error) throw error;
     
-    const newTransaction = db.getDb().prepare('SELECT * FROM transactions WHERE id = ?').get(result.lastInsertRowid);
     console.log('Created transaction:', newTransaction);
     
     // Include budget warning in response if applicable
@@ -153,7 +181,7 @@ router.post('/', [
 });
 
 // PUT /api/transactions/:id - Update transaction
-router.put('/:id', (req, res) => {
+router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { description, date, category, type, amount, account, notes } = req.body;
@@ -170,19 +198,27 @@ router.put('/:id', (req, res) => {
       return res.status(400).json({ error: 'Amount must be greater than 0' });
     }
 
-    const stmt = db.getDb().prepare(`
-      UPDATE transactions 
-      SET description = ?, date = ?, category = ?, type = ?, amount = ?, account = ?, notes = ?
-      WHERE id = ?
-    `);
+    const { data: updatedTransaction, error } = await db.getSupabase()
+      .from('transactions')
+      .update({
+        description,
+        date,
+        category,
+        type,
+        amount,
+        account,
+        notes: notes || ''
+      })
+      .eq('id', id)
+      .select()
+      .single();
     
-    const result = stmt.run(description, date, category, type, amount, account, notes || '', id);
+    if (error) throw error;
     
-    if (result.changes === 0) {
+    if (!updatedTransaction) {
       return res.status(404).json({ error: 'Transaction not found' });
     }
     
-    const updatedTransaction = db.getDb().prepare('SELECT * FROM transactions WHERE id = ?').get(id);
     res.json(updatedTransaction);
   } catch (error) {
     console.error('Error updating transaction:', error);
@@ -191,16 +227,16 @@ router.put('/:id', (req, res) => {
 });
 
 // DELETE /api/transactions/:id - Delete transaction
-router.delete('/:id', (req, res) => {
+router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
-    const stmt = db.getDb().prepare('DELETE FROM transactions WHERE id = ?');
-    const result = stmt.run(id);
+    const { error } = await db.getSupabase()
+      .from('transactions')
+      .delete()
+      .eq('id', id);
     
-    if (result.changes === 0) {
-      return res.status(404).json({ error: 'Transaction not found' });
-    }
+    if (error) throw error;
     
     res.json({ message: 'Transaction deleted successfully' });
   } catch (error) {

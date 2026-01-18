@@ -3,7 +3,7 @@ const router = express.Router();
 const db = require('../config/database');
 
 // GET /api/dashboard?context_id=:id - Get dashboard summary data
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
     const { context_id } = req.query;
     
@@ -12,97 +12,140 @@ router.get('/', (req, res) => {
     }
 
     const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM format
+    const currentMonthStart = `${currentMonth}-01`;
+    const currentMonthEnd = new Date(new Date(currentMonthStart).setMonth(new Date(currentMonthStart).getMonth() + 1)).toISOString().slice(0, 10);
 
     // Get total income and expenses for current month
-    const incomeExpenses = db.getDb().prepare(`
-      SELECT 
-        type,
-        SUM(amount) as total
-      FROM transactions 
-      WHERE context_id = ? AND strftime('%Y-%m', date) = ?
-      GROUP BY type
-    `).all(context_id, currentMonth);
+    const { data: transactions } = await db.getSupabase()
+      .from('transactions')
+      .select('type, amount')
+      .eq('context_id', context_id)
+      .gte('date', currentMonthStart)
+      .lt('date', currentMonthEnd);
+
+    const incomeExpenses = transactions?.reduce((acc, t) => {
+      if (!acc[t.type]) acc[t.type] = { type: t.type, total: 0 };
+      acc[t.type].total += parseFloat(t.amount);
+      return acc;
+    }, {}) || {};
 
     // Get spending by category for current month
-    const spendingByCategory = db.getDb().prepare(`
-      SELECT 
-        category,
-        SUM(amount) as total
-      FROM transactions 
-      WHERE context_id = ? AND type = 'Expense' AND strftime('%Y-%m', date) = ?
-      GROUP BY category
-      ORDER BY total DESC
-    `).all(context_id, currentMonth);
+    const { data: expenseTransactions } = await db.getSupabase()
+      .from('transactions')
+      .select('category, amount')
+      .eq('context_id', context_id)
+      .eq('type', 'Expense')
+      .gte('date', currentMonthStart)
+      .lt('date', currentMonthEnd);
+
+    const spendingByCategory = expenseTransactions?.reduce((acc, t) => {
+      if (!acc[t.category]) acc[t.category] = { category: t.category, total: 0 };
+      acc[t.category].total += parseFloat(t.amount);
+      return acc;
+    }, {}) || {};
+
+    const spendingByCategoryArray = Object.values(spendingByCategory)
+      .sort((a, b) => b.total - a.total);
 
     // Get total subscription costs
-    const totalSubscriptions = db.getDb().prepare(`
-      SELECT SUM(amount) as total
-      FROM subscriptions 
-      WHERE context_id = ? AND status = 'Active'
-    `).get(context_id);
+    const { data: subscriptions } = await db.getSupabase()
+      .from('subscriptions')
+      .select('amount')
+      .eq('context_id', context_id)
+      .eq('status', 'Active');
+
+    const totalSubscriptions = subscriptions?.reduce((sum, s) => sum + parseFloat(s.amount), 0) || 0;
 
     // Get savings progress
-    const savingsProgress = db.getDb().prepare(`
-      SELECT 
-        account,
-        SUM(amount) as current_amount,
-        MAX(goal) as goal
-      FROM savings 
-      WHERE context_id = ?
-      GROUP BY account
-    `).all(context_id);
+    const { data: savings } = await db.getSupabase()
+      .from('savings')
+      .select('account, amount, goal')
+      .eq('context_id', context_id);
+
+    const savingsProgress = savings?.reduce((acc, s) => {
+      if (!acc[s.account]) {
+        acc[s.account] = { account: s.account, current_amount: 0, goal: 0 };
+      }
+      acc[s.account].current_amount += parseFloat(s.amount);
+      acc[s.account].goal = Math.max(acc[s.account].goal, parseFloat(s.goal));
+      return acc;
+    }, {}) || {};
+
+    const savingsProgressArray = Object.values(savingsProgress);
 
     // Get investment summary
-    const investmentSummary = db.getDb().prepare(`
-      SELECT 
-        SUM(amount_invested) as total_invested,
-        SUM(current_value) as total_current_value,
-        COUNT(*) as total_investments
-      FROM investments 
-      WHERE context_id = ?
-    `).get(context_id);
+    const { data: investments } = await db.getSupabase()
+      .from('investments')
+      .select('amount_invested, current_value')
+      .eq('context_id', context_id);
+
+    const investmentSummary = investments?.reduce((acc, inv) => {
+      acc.total_invested += parseFloat(inv.amount_invested);
+      acc.total_current_value += parseFloat(inv.current_value);
+      acc.total_investments += 1;
+      return acc;
+    }, { total_invested: 0, total_current_value: 0, total_investments: 0 }) || { total_invested: 0, total_current_value: 0, total_investments: 0 };
 
     // Get budget vs actual spending
-    const budgetVsActual = db.getDb().prepare(`
-      SELECT 
-        b.category,
-        b.monthly_limit,
-        COALESCE(SUM(t.amount), 0) as actual_spending
-      FROM budgets b
-      LEFT JOIN transactions t ON b.context_id = t.context_id 
-        AND b.category = t.category 
-        AND t.type = 'Expense'
-        AND strftime('%Y-%m', t.date) = b.month
-      WHERE b.context_id = ? AND b.month = ?
-      GROUP BY b.category, b.monthly_limit
-    `).all(context_id, currentMonth);
+    const { data: budgets } = await db.getSupabase()
+      .from('budgets')
+      .select('category, monthly_limit')
+      .eq('context_id', context_id)
+      .eq('month', currentMonth);
+
+    const budgetVsActual = await Promise.all(
+      (budgets || []).map(async (budget) => {
+        const { data: categoryTransactions } = await db.getSupabase()
+          .from('transactions')
+          .select('amount')
+          .eq('context_id', context_id)
+          .eq('category', budget.category)
+          .eq('type', 'Expense')
+          .gte('date', currentMonthStart)
+          .lt('date', currentMonthEnd);
+
+        const actualSpending = categoryTransactions?.reduce((sum, t) => sum + parseFloat(t.amount), 0) || 0;
+
+        return {
+          category: budget.category,
+          monthly_limit: parseFloat(budget.monthly_limit),
+          actual_spending: actualSpending
+        };
+      })
+    );
 
     // Get recent transactions (last 5)
-    const recentTransactions = db.getDb().prepare(`
-      SELECT * FROM transactions 
-      WHERE context_id = ? 
-      ORDER BY date DESC, created_at DESC 
-      LIMIT 5
-    `).all(context_id);
+    const { data: recentTransactions } = await db.getSupabase()
+      .from('transactions')
+      .select('*')
+      .eq('context_id', context_id)
+      .order('date', { ascending: false })
+      .order('created_at', { ascending: false })
+      .limit(5);
 
     // Get upcoming subscription renewals (next 30 days)
-    const upcomingRenewals = db.getDb().prepare(`
-      SELECT * FROM subscriptions 
-      WHERE context_id = ? AND status = 'Active'
-        AND date(next_billing_date) <= date('now', '+30 days')
-      ORDER BY next_billing_date ASC
-      LIMIT 5
-    `).all(context_id);
+    const thirtyDaysFromNow = new Date();
+    thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);
+    const thirtyDaysFromNowStr = thirtyDaysFromNow.toISOString().slice(0, 10);
+
+    const { data: upcomingRenewals } = await db.getSupabase()
+      .from('subscriptions')
+      .select('*')
+      .eq('context_id', context_id)
+      .eq('status', 'Active')
+      .lte('next_billing_date', thirtyDaysFromNowStr)
+      .order('next_billing_date', { ascending: true })
+      .limit(5);
 
     // Calculate profit/loss for investments
-    const profitLoss = investmentSummary ? 
-      investmentSummary.total_current_value - investmentSummary.total_invested : 0;
-    const profitLossPercentage = investmentSummary && investmentSummary.total_invested > 0 ?
-      ((profitLoss / investmentSummary.total_invested) * 100) : 0;
+    const profitLoss = investmentSummary.total_current_value - investmentSummary.total_invested;
+    const profitLossPercentage = investmentSummary.total_invested > 0
+      ? ((profitLoss / investmentSummary.total_invested) * 100)
+      : 0;
 
     // Process income/expenses data
-    const income = incomeExpenses.find(item => item.type === 'Income')?.total || 0;
-    const expenses = incomeExpenses.find(item => item.type === 'Expense')?.total || 0;
+    const income = incomeExpenses.Income?.total || 0;
+    const expenses = incomeExpenses.Expense?.total || 0;
     const netIncome = income - expenses;
 
     res.json({
@@ -110,17 +153,17 @@ router.get('/', (req, res) => {
         totalIncome: income,
         totalExpenses: expenses,
         netIncome: netIncome,
-        totalSubscriptions: totalSubscriptions?.total || 0,
-        totalInvested: investmentSummary?.total_invested || 0,
-        totalCurrentValue: investmentSummary?.total_current_value || 0,
+        totalSubscriptions: totalSubscriptions,
+        totalInvested: investmentSummary.total_invested,
+        totalCurrentValue: investmentSummary.total_current_value,
         profitLoss: profitLoss,
         profitLossPercentage: profitLossPercentage
       },
-      spendingByCategory,
-      savingsProgress,
+      spendingByCategory: spendingByCategoryArray,
+      savingsProgress: savingsProgressArray,
       budgetVsActual,
-      recentTransactions,
-      upcomingRenewals,
+      recentTransactions: recentTransactions || [],
+      upcomingRenewals: upcomingRenewals || [],
       currentMonth
     });
   } catch (error) {
